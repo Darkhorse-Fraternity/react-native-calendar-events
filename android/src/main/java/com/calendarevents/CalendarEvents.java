@@ -1,20 +1,21 @@
 package com.calendarevents;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.content.SharedPreferences;
-import android.Manifest;
-import android.database.DatabaseUtils;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.net.Uri;
 import android.provider.CalendarContract;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
-import android.database.Cursor;
+import android.util.Log;
 
+import com.facebook.react.bridge.Dynamic;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContext;
@@ -27,14 +28,12 @@ import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeArray;
 import com.facebook.react.bridge.WritableNativeMap;
-import com.facebook.react.bridge.Dynamic;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.TimeZone;
-import android.util.Log;
 
 public class CalendarEvents extends ReactContextBaseJavaModule {
 
@@ -298,7 +297,7 @@ public class CalendarEvents extends ReactContextBaseJavaModule {
         Uri uri = uriBuilder.build();
 
         String selection = "(Instances._ID = " + eventID + ")";
-            
+
         cursor = cr.query(uri, new String[]{
                 CalendarContract.Instances._ID,
                 CalendarContract.Instances.TITLE,
@@ -381,7 +380,7 @@ public class CalendarEvents extends ReactContextBaseJavaModule {
         }
 
         if (details.hasKey("recurrence")) {
-            String rule = createRecurrenceRule(details.getString("recurrence"), null, null, null);
+            String rule = createRecurrenceRule(details.getString("recurrence"), null, null, null,null);
             if (rule != null) {
                 eventValues.put(CalendarContract.Events.RRULE, rule);
             }
@@ -396,6 +395,7 @@ public class CalendarEvents extends ReactContextBaseJavaModule {
                 Integer interval = null;
                 Integer occurrence = null;
                 String endDate = null;
+                String byDay = null;
 
                 if (recurrenceRule.hasKey("interval")) {
                     interval = recurrenceRule.getInt("interval");
@@ -422,7 +422,12 @@ public class CalendarEvents extends ReactContextBaseJavaModule {
                     }
                 }
 
-                String rule = createRecurrenceRule(frequency, interval, endDate, occurrence);
+
+                if(recurrenceRule.hasKey("byday")) {
+                    byDay = recurrenceRule.getString("byday");
+                }
+
+                String rule = createRecurrenceRule(frequency, interval, endDate, occurrence, byDay);
                 if (duration != null) {
                     eventValues.put(CalendarContract.Events.DURATION, duration);
                 }
@@ -789,7 +794,7 @@ public class CalendarEvents extends ReactContextBaseJavaModule {
     //endregion
 
     //region Recurrence Rule
-    private String createRecurrenceRule(String recurrence, Integer interval, String endDate, Integer occurrence) {
+    private String createRecurrenceRule(String recurrence, Integer interval, String endDate, Integer occurrence, String byDay) {
         String rrule;
 
         if (recurrence.equals("daily")) {
@@ -812,6 +817,10 @@ public class CalendarEvents extends ReactContextBaseJavaModule {
             rrule += ";UNTIL=" + endDate;
         } else if (occurrence != null) {
             rrule += ";COUNT=" + occurrence;
+        }
+
+        if (byDay != null) {
+            rrule += ";BYDAY=" + byDay;
         }
 
         return rrule;
@@ -885,6 +894,8 @@ public class CalendarEvents extends ReactContextBaseJavaModule {
                     }
                 } else if (recurrenceRules[2].split("=")[0].equals("COUNT")) {
                     recurrenceRule.putInt("occurrence", Integer.parseInt(recurrenceRules[2].split("=")[1]));
+                } else if (recurrenceRules[2].split("=")[0].equals("BYDAY")) {
+                    recurrenceRule.putString("byday", recurrenceRules[2].split("=")[1].toLowerCase());
                 }
 
             }
