@@ -135,7 +135,7 @@ RCT_EXPORT_MODULE()
     }
 
     if (recurrence) {
-        EKRecurrenceRule *rule = [self createRecurrenceRule:recurrence interval:0 occurrence:0 endDate:nil];
+        EKRecurrenceRule *rule = [self createRecurrenceRule:recurrence interval:0 occurrence:0 endDate:nil days: nil weekPositionInMonth: 0];
         if (rule) {
             calendarEvent.recurrenceRules = [NSArray arrayWithObject:rule];
         }
@@ -146,8 +146,10 @@ RCT_EXPORT_MODULE()
         NSInteger interval = [RCTConvert NSInteger:recurrenceRule[@"interval"]];
         NSInteger occurrence = [RCTConvert NSInteger:recurrenceRule[@"occurrence"]];
         NSDate *endDate = [RCTConvert NSDate:recurrenceRule[@"endDate"]];
+        NSArray *daysOfWeek = [RCTConvert NSArray:recurrenceRule[@"daysOfWeek"]];
+        NSInteger weekPositionInMonth = [RCTConvert NSInteger:recurrenceRule[@"weekPositionInMonth"]];
 
-        EKRecurrenceRule *rule = [self createRecurrenceRule:frequency interval:interval occurrence:occurrence endDate:endDate];
+        EKRecurrenceRule *rule = [self createRecurrenceRule:frequency interval:interval occurrence:occurrence endDate:endDate days:daysOfWeek weekPositionInMonth: weekPositionInMonth];
         if (rule) {
             calendarEvent.recurrenceRules = [NSArray arrayWithObject:rule];
         } else {
@@ -276,12 +278,56 @@ RCT_EXPORT_MODULE()
     return recurrence;
 }
 
--(EKRecurrenceRule *)createRecurrenceRule:(NSString *)frequency interval:(NSInteger)interval occurrence:(NSInteger)occurrence endDate:(NSDate *)endDate
+-(EKRecurrenceDayOfWeek *) dayOfTheWeekMatchingName: (NSString *) day
+{
+    EKRecurrenceDayOfWeek *weekDay = nil;
+
+    if ([day isEqualToString:@"MO"]) {
+        weekDay = [EKRecurrenceDayOfWeek dayOfWeek:2];
+    } else if ([day isEqualToString:@"TU"]) {
+        weekDay = [EKRecurrenceDayOfWeek dayOfWeek:3];
+    } else if ([day isEqualToString:@"WE"]) {
+        weekDay = [EKRecurrenceDayOfWeek dayOfWeek:4];
+    } else if ([day isEqualToString:@"TH"]) {
+        weekDay = [EKRecurrenceDayOfWeek dayOfWeek:5];
+    } else if ([day isEqualToString:@"FR"]) {
+        weekDay = [EKRecurrenceDayOfWeek dayOfWeek:6];
+    } else if ([day isEqualToString:@"SA"]) {
+        weekDay = [EKRecurrenceDayOfWeek dayOfWeek:7];
+    } else if ([day isEqualToString:@"SU"]) {
+        weekDay = [EKRecurrenceDayOfWeek dayOfWeek:1];
+    } 
+
+    NSLog(@"%s", "dayOfTheWeek");
+    NSLog(@"%@", weekDay);
+    return weekDay;
+} 
+
+-(NSMutableArray *) createRecurrenceDaysOfWeek: (NSArray *) days
+{
+    NSMutableArray *daysOfTheWeek = nil;
+
+    if (days.count) {
+        daysOfTheWeek = [[NSMutableArray alloc] init];
+
+        for (NSString *day in days) {
+            EKRecurrenceDayOfWeek *weekDay = [self dayOfTheWeekMatchingName: day];
+            [daysOfTheWeek addObject:weekDay];
+            
+        }
+    }
+    
+    return daysOfTheWeek;
+}
+
+-(EKRecurrenceRule *)createRecurrenceRule:(NSString *)frequency interval:(NSInteger)interval occurrence:(NSInteger)occurrence endDate:(NSDate *)endDate days:(NSArray *)days weekPositionInMonth:(NSInteger) weekPositionInMonth
 {
     EKRecurrenceRule *rule = nil;
     EKRecurrenceEnd *recurrenceEnd = nil;
     NSInteger recurrenceInterval = 1;
     NSArray *validFrequencyTypes = @[@"daily", @"weekly", @"monthly", @"yearly"];
+    NSArray *daysOfTheWeekRecurrence = [self createRecurrenceDaysOfWeek:days];
+    NSMutableArray *setPositions = nil;
 
     if (frequency && [validFrequencyTypes containsObject:frequency]) {
 
@@ -295,8 +341,18 @@ RCT_EXPORT_MODULE()
             recurrenceInterval = interval;
         }
 
+        if (weekPositionInMonth > 0) {
+            setPositions = [NSMutableArray array];
+            [setPositions addObject:[NSNumber numberWithInteger: weekPositionInMonth ]];
+        }
         rule = [[EKRecurrenceRule alloc] initRecurrenceWithFrequency:[self frequencyMatchingName:frequency]
                                                             interval:recurrenceInterval
+                                                                 daysOfTheWeek:daysOfTheWeekRecurrence
+                                                                 daysOfTheMonth:nil
+                                                                 monthsOfTheYear:nil
+                                                                 weeksOfTheYear:nil
+                                                                 daysOfTheYear:nil
+                                                                 setPositions:setPositions
                                                                  end:recurrenceEnd];
     }
     return rule;
@@ -650,6 +706,70 @@ RCT_EXPORT_METHOD(findCalendars:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
         }
         resolve(eventCalendars);
     }
+}
+
+RCT_EXPORT_METHOD(saveCalendar:(NSDictionary *)options resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+{
+    if (![self isCalendarAccessGranted]) {
+        return reject(@"error", @"unauthorized to access calendar", nil);
+    }
+
+    EKCalendar *calendar = nil;
+    EKSource *calendarSource = nil;
+    NSString *title = [RCTConvert NSString:options[@"title"]];
+    NSNumber *color = [RCTConvert NSNumber:options[@"color"]];
+    NSString *type = [RCTConvert NSString:options[@"entityType"]];
+
+    // First: Check if the user has an iCloud source set-up.
+    for (EKSource *source in self.eventStore.sources) {
+        if (source.sourceType == EKSourceTypeCalDAV && [source.title isEqualToString:@"iCloud"]) {
+            calendarSource = source;
+            break;
+        }
+    }
+
+    // Second: If no iCloud source is set-up / utilised, then fall back and use the local source.
+    if (calendarSource == nil) {
+        for (EKSource *source in self.eventStore.sources) {
+            if (source.sourceType == EKSourceTypeLocal) {
+                calendarSource = source;
+                break;
+            }
+        }
+    }
+
+    if (calendarSource == nil) {
+        return reject(@"error", @"no source found to create the calendar (local & icloud)", nil);
+    }
+
+    if ([type isEqualToString:@"event"]) {
+    calendar = [EKCalendar calendarForEntityType:EKEntityTypeEvent eventStore:self.eventStore];
+    } else if ([type isEqualToString:@"reminder"]) {
+      calendar = [EKCalendar calendarForEntityType:EKEntityTypeReminder eventStore:self.eventStore];
+    } else {
+        return reject(@"error",
+             [NSString stringWithFormat:@"Calendar entityType %@ is not supported", type],
+             nil);
+    }
+
+    calendar.source = calendarSource;
+    if (title) {
+      calendar.title = title;
+    }
+
+    if (color) {
+      calendar.CGColor = [RCTConvert UIColor:color].CGColor;
+    } else if (options[@"color"] == [NSNull null]) {
+      calendar.CGColor = nil;
+    }
+
+    NSError *error = nil;
+    BOOL success = [self.eventStore saveCalendar:calendar commit:YES error:&error];
+    if (success) {
+        return resolve(calendar.calendarIdentifier);
+    }
+    return reject(@"error",
+                  [NSString stringWithFormat:@"Calendar %@ could not be saved", title], error);
 }
 
 RCT_EXPORT_METHOD(fetchAllEvents:(NSDate *)startDate endDate:(NSDate *)endDate calendars:(NSArray *)calendars resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
